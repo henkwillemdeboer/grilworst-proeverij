@@ -1,7 +1,7 @@
 {
-  "name": "fuet-proeverij",
+  "name": "bitterbal-proeverij",
   "version": "1.0.0",
-  "description": "Fuet tasting app voor de vrienden",
+  "description": "Bitterbal tasting app voor de vrienden",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

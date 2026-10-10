@@ -33,7 +33,10 @@ const QUIZ_QUESTIONS = [
 ];
 
 // ── Minigame sequence ─────────────────────────────────────────────────────────
-const MINIGAME_SEQUENCE = ['count_slices', 'count_urker_jan', 'curling'];
+const MINIGAME_SEQUENCE = ['bitterbal_catch', 'bitterbal_stack', 'bitterbal_slice', 'bitterbal_basket', 'saus_memory', 'bitterbal_bounce', 'mosterd_mikken'];
+// Arcade games: every player plays on their own device with the same seed; highest score wins.
+const ARCADE_TYPES = ['bitterbal_catch', 'bitterbal_basket', 'bitterbal_stack', 'mosterd_mikken', 'bitterbal_slice', 'saus_memory', 'bitterbal_bounce'];
+const ARCADE_MAX = { bitterbal_catch: 20000, bitterbal_basket: 8000, bitterbal_stack: 4000, mosterd_mikken: 2000, bitterbal_slice: 3000, saus_memory: 13000, bitterbal_bounce: 6000 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let state = {
@@ -118,6 +121,8 @@ function startMinigame(type) {
     startedAt: null,
     duration: null,
     submissions: {},
+    stats: {},
+    seed: Math.floor(Math.random() * 2147483647),
     curlingShots: {},
     results: null,
     pointsAwarded: {},
@@ -133,6 +138,13 @@ function advanceMinigameStatus() {
     case 'count_slices':
     case 'count_urker_jan':
     case 'perfect_slice':
+    case 'bitterbal_catch':
+    case 'bitterbal_basket':
+    case 'bitterbal_stack':
+    case 'mosterd_mikken':
+    case 'bitterbal_slice':
+    case 'saus_memory':
+    case 'bitterbal_bounce':
       if (mg.status === 'intro') { mg.status = 'submit'; broadcast(); }
       break;
     case 'curling':
@@ -170,6 +182,8 @@ function revealMinigame() {
   } else if (mg.type === 'count_slices') {
     mg.target = 173;
     ranked = [...players].sort((a, b) => Math.abs(subs[a] - 173) - Math.abs(subs[b] - 173));
+  } else if (ARCADE_TYPES.includes(mg.type)) {
+    ranked = [...players].sort((a, b) => subs[b] - subs[a]);   // highest score wins
   } else {
     ranked = players;
   }
@@ -309,12 +323,23 @@ io.on('connection', (socket) => {
     advanceMinigameStatus();
   });
 
-  socket.on('submitMinigameResult', ({ value }) => {
+  socket.on('submitMinigameResult', ({ value, stats }) => {
     const name = socket.data.name;
     if (!name || !state.minigame) return;
     if (state.minigame.submissions[name] !== undefined) return;
-    const numVal = parseFloat(value);
+    let numVal = parseFloat(value);
     if (isNaN(numVal)) return;
+    if (ARCADE_TYPES.includes(state.minigame.type)) {
+      numVal = Math.max(0, Math.min(ARCADE_MAX[state.minigame.type], Math.round(numVal)));
+      const clean = {};
+      if (stats && typeof stats === 'object') {
+        Object.keys(stats).slice(0, 12).forEach(k => {
+          const v = Number(stats[k]);
+          if (/^[a-zA-Z]{1,16}$/.test(k) && isFinite(v)) clean[k] = Math.max(0, Math.min(100000, Math.round(v)));
+        });
+      }
+      state.minigame.stats[name] = clean;
+    }
     state.minigame.submissions[name] = numVal;
     broadcast();
     const connected = Object.entries(state.players).filter(([,p])=>p.connected).map(([n])=>n);
