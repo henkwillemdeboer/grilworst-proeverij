@@ -1286,8 +1286,8 @@ const ARC_META = {
   chipocalypse: {
     icon: '🏃', title: 'Chipocalypse', tag: 'Overleef zo lang mogelijk · 3 levens',
     rules: [
-      ['👆', 'Tik in het bovenste deel van het scherm om te springen'],
-      ['👇', 'Tik onderin of swipe omlaag om te bukken'],
+      ['👆', 'Swipe omhoog om te springen'],
+      ['👇', 'Swipe omlaag om te bukken (of te snel naar beneden te vallen als je in de lucht zit)'],
       ['🌶️', 'Pak chips voor +10. Gevaar: zakken chips (springen), vliegende reuzenchips (bukken) en rollende scholletjes (springen)'],
       ['⚡', 'Hij loopt vanzelf en wordt steeds sneller'],
       ['💥', 'Drie keer geraakt = einde. Score = afstand + chips']
@@ -1299,8 +1299,8 @@ const ARC_META = {
       ['🌶️', 'GAS om te rijden, REM om af te remmen. Gele pijlen op de grond = TURBO'],
       ['↺↻', 'In de lucht: ACHTER tilt je neus op, VOOR duwt hem omlaag. Land op je wielen!'],
       ['⛰️', 'Neem een turbo-pad en schiet van een grote ramp hoog de lucht in voor salto\'s. Landt hij op zijn hoofd, dan crasht hij'],
-      ['🤸', 'SALTO\'S! Een hele rol voorover of achterover in de lucht en netjes landen = 4 seconden eraf (twee in één sprong: 6 seconden per salto). Dat is HEEL veel bonus'],
-      ['💥', 'Elke crash kost 2 seconden en je start bij het laatste checkpoint. Zonder sturen richt hij zichzelf een beetje op'],
+      ['🤸', 'SALTO\'S! Een hele rol voorover of achterover in de lucht en netjes landen = 2 seconden eraf (twee in één sprong: 3 seconden per salto)'],
+      ['💥', 'Elke crash kost 3 seconden en je start bij het laatste checkpoint'],
       ['🏁', 'Haal de finish zo snel mogelijk. Wie niet finisht, wordt gerangschikt op afstand']
     ]
   }
@@ -2001,8 +2001,12 @@ function createChipocalypseGame(canvas, opts) {
     if (g.grounded) { if (g.slideT <= 0) arcSfx('slide'); g.slideT = .6; }
     else { g.slideQ = .2; g.vy = Math.max(g.vy, 760); }
   }
-  g.onDown = function (p) { if (g.phase !== 'play' || g.over) return; g.startY = p.y; g.swiped = false; if (p.y > H * .62) slide(); else jump(); };
-  g.onMove = function (p) { if (g.phase === 'play' && !g.swiped && p.pressed && p.y - g.startY > 38) { g.swiped = true; slide(); } };
+  g.onDown = function (p) { g.startY = p.y; };
+  g.onMove = function (p) {                                  // swipe up = jump, swipe down = slide (can be chained in one gesture)
+    if (g.phase !== 'play' || g.over || !p.pressed) return;
+    const d = p.y - g.startY;
+    if (d < -26) { jump(); g.startY = p.y; } else if (d > 26) { slide(); g.startY = p.y; }
+  };
   g.onUp = function () {};
   g.onKey = function (e, down) {
     if (!down || e.repeat) return;
@@ -2170,8 +2174,8 @@ function createChipocalypseGame(canvas, opts) {
     _hudText(ctx, '🌶️'.repeat(Math.max(0, g.lives)) + '·'.repeat(Math.max(0, 3 - g.lives)), W - 14, 38, 20, '#fff', 'right');
     _hudText(ctx, _fmtTime(TIME_CAP - g.t), W - 14, 58, 12, '#fff3d6', 'right');
     if (g.phase === 'play' && g.t < 3.2) {
-      _hudText(ctx, 'TIK BOVEN = SPRINGEN', W / 2, 488, 15, '#fff', 'center');
-      _hudText(ctx, 'ONDERIN / SWIPE OMLAAG = BUKKEN', W / 2, 510, 15, '#fff', 'center');
+      _hudText(ctx, 'SWIPE OMHOOG = SPRINGEN', W / 2, 488, 16, '#fff', 'center');
+      _hudText(ctx, 'SWIPE OMLAAG = BUKKEN', W / 2, 512, 16, '#fff', 'center');
     }
     _countdownDraw(ctx, g, W, H);
     _overDraw(ctx, g, W, H);
@@ -2185,7 +2189,7 @@ function createChipocalypseGame(canvas, opts) {
 function createBikeGame(canvas, opts) {
   const W = ARC_W, H = ARC_H, ctx = canvas.getContext('2d');
   const rng = _rng(opts.seed);
-  const STEP = 8, R = 15, L = 58, G = 1500, Y0 = 400, COURSE = 15000, FINISH = COURSE - 260, TIME_CAP = 100, PENALTY = 2, FLIP_BONUS = 4, Z = .9;
+  const STEP = 8, R = 15, L = 58, G = 1500, Y0 = 400, COURSE = 15000, FINISH = COURSE - 260, TIME_CAP = 100, PENALTY = 3, FLIP_BONUS = 2, Z = .9;
   const SPR = _ballSprite(R, 'reg'), BIG = _ballSprite(30, 'reg');
   // ── course (identical for everyone: same seed) ──
   const ys = [], pads = [];
@@ -2200,7 +2204,10 @@ function createBikeGame(canvas, opts) {
         const h = 170 + rng() * 110, len = 270 + rng() * 80;
         add(len, t => t < .88 ? -h * (t / .88) : -h * (1 - (t - .88) / .12));
         add(300 + rng() * 120, () => 0);
-      } else if (r < .8) { const a2 = 70 + rng() * 60; add(480 + rng() * 200, t => -a2 * Math.pow(Math.sin(Math.PI * t), 2)); add(120, () => 0); pad(-60); }
+      } else if (r < .62) {                                    // sharp step ("kicker"): hit it with speed and the nose pops up
+        const st = 20 + rng() * 14; add(160, () => 0); add(26, t => -st * t); add(150 + rng() * 80, () => -st); add(26, t => -st * (1 - t)); add(180, () => 0);
+      } else if (r < .72) { const a3 = 12 + rng() * 10, len3 = 300 + rng() * 120, nn3 = Math.round(len3 / 58); add(len3, t => -a3 * Math.pow(Math.sin(Math.PI * nn3 * t), 2)); add(80, () => 0);
+      } else if (r < .86) { const a2 = 70 + rng() * 60; add(480 + rng() * 200, t => -a2 * Math.pow(Math.sin(Math.PI * t), 2)); add(120, () => 0); pad(-60); }
       else { add(260 + rng() * 140, () => 0); pad(-120); }
     }
     add(COURSE - ys.length * STEP + 600, () => 0);
@@ -2342,12 +2349,12 @@ function createBikeGame(canvas, opts) {
       }
       // no steering → the spin dies out by itself (hold ↺/↻ to rotate, let go to stop) + gentle auto-levelling
       if (!g.fwd && !g.back) {
-        const nx3 = -v.ay, ny3 = v.ax, om = ((b.vx - a.vx) * nx3 + (b.vy - a.vy) * ny3) / L, kd = 3.5 * om * (L / 2) * dt;
+        const nx3 = -v.ay, ny3 = v.ax, om = ((b.vx - a.vx) * nx3 + (b.vy - a.vy) * ny3) / L, kd = 1.6 * om * (L / 2) * dt;
         b.vx -= nx3 * kd; b.vy -= ny3 * kd; a.vx += nx3 * kd; a.vy += ny3 * kd;
       }
       if (!g.fwd && !g.back && Math.abs(g.rot) < .9) {
         const sl = Math.atan(slopeAt(b.x)); let e = sl - ang; if (e > Math.PI) e -= 2 * Math.PI; if (e < -Math.PI) e += 2 * Math.PI;
-        if (Math.abs(e) < 1.2) { const k = e * 260 * dt, nx2 = -v.ay, ny2 = v.ax; b.vx += nx2 * k; b.vy += ny2 * k; a.vx -= nx2 * k; a.vy -= ny2 * k; }
+        if (Math.abs(e) < 1.2) { const k = e * 45 * dt, nx2 = -v.ay, ny2 = v.ax; b.vx += nx2 * k; b.vy += ny2 * k; a.vx -= nx2 * k; a.vy -= ny2 * k; }
       }
     } else if (g.prevAir) {
       if (g.pend > 0) {
@@ -2360,7 +2367,7 @@ function createBikeGame(canvas, opts) {
     }
     g.lastAng = ang; g.prevAir = air;
     const hp = headPos();
-    if (hp.y + 5 > hAt(hp.x)) crash();
+    if (hp.y + 9 > hAt(hp.x)) crash();
     if (b.x >= FINISH) { g.finished = true; g.maxX = FINISH; arcSfx('golden'); pop(b.x, b.y - 90, 'FINISH!', '#FFD23C', 30); _fxBurst(g.parts, b.x, b.y - 40, 40, ['#FFD23C', '#e0452f', '#fff', '#F08A24'], 400); }
     if (g.gas && (a.c)) { if (Math.random() < dt * 40) g.parts.push({ x: a.x - 10, y: a.y + R - 2, vx: -80 - Math.random() * 60, vy: -30 - Math.random() * 50, life: .5, max: .6, color: Math.random() < .5 ? '#e0452f' : '#ffb347', size: 2 + Math.random() * 3 }); }
     updCam(dt);
@@ -2512,7 +2519,7 @@ function createBikeGame(canvas, opts) {
 }
 
 const ARC_CREATORS = { chip_eating: createEatingGame, chipocalypse: createChipocalypseGame, bike_race: createBikeGame };
-const ARC_HINTS = { chip_eating: 'Tik zo snel je kunt!', chipocalypse: 'Boven = springen · onderin / swipe omlaag = bukken', bike_race: 'GAS · REM · ↺↻ balans in de lucht' };
+const ARC_HINTS = { chip_eating: 'Tik zo snel je kunt!', chipocalypse: 'Swipe omhoog = springen · swipe omlaag = bukken', bike_race: 'GAS · REM · ↺↻ balans in de lucht' };
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Loop, lifecycle and screens
