@@ -424,8 +424,18 @@ body.arc-running #settings-btn{display:none!important}
       <button class="emoji-btn photo-btn" onclick="sendReaction(':tfc:')"><img data-photo alt=""><i>⏰</i></button>
     </div>
   </div>
+  <div class="card" id="mode-card">
+    <div class="sec-h">Spelmodus</div>
+    <div id="mode-btns" style="display:flex;gap:8px"></div>
+    <p class="hint" id="mode-note" style="margin-top:8px"></p>
+  </div>
+  <div class="card" id="mg-card" style="display:none">
+    <div class="sec-h">🎮 Minigame-toernooi</div>
+    <div id="mg-pick"></div>
+    <div id="mg-standings" style="margin-top:10px"></div>
+  </div>
   <div class="host-banner" id="host-banner" style="display:none"></div>
-  <div class="card">
+  <div class="card" id="products-card">
     <h2 style="margin-bottom:12px" id="products-title">Producten</h2>
     <div id="host-add" style="display:none">
       <div class="price-row">
@@ -438,7 +448,7 @@ body.arc-running #settings-btn{display:none!important}
     <p class="hint" id="guest-note" style="display:none;margin:0 0 10px">Alleen de host voegt producten toe.</p>
     <div id="fuet-tags" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div>
   </div>
-  <div style="width:100%;max-width:480px">
+  <div style="width:100%;max-width:480px" id="start-wrap">
     <button class="btn btn-red" id="start-btn" onclick="startTasting()" disabled>🚀 Start de proeverij!</button>
     <p class="hint" id="start-note" style="text-align:center"></p>
   </div>
@@ -765,12 +775,37 @@ function renderSetupScreen() {
     if (amHost) { const x = document.createElement('button'); x.textContent = '✕'; x.onclick = () => socket.emit('removeFuet', { id: f.id }); tag.appendChild(x); }
     ft.appendChild(tag);
   });
+  renderModeUI();
   const sb = document.getElementById('start-btn');
   sb.disabled = !(amHost && st.fuets && st.fuets.length);
   sb.style.display = amHost ? 'block' : 'none';
   document.getElementById('start-note').textContent = amHost
     ? ((st.fuets || []).length ? '' : 'Voeg minstens één product toe')
     : '⏳ Wachten tot ' + st.host + ' de proeverij start…';
+}
+function renderModeUI() {
+  const st = serverState, amHost = st.host === myName, mm = st.mode === 'minigames';
+  const bt = document.getElementById('mode-btns'); bt.innerHTML = '';
+  [['tasting', '🌶️ Proeverij', 'met blind tasting + minigames'], ['minigames', '🎮 Alleen minigames', 'alle 3 games, hoogste score wint']].forEach(([m, label]) => {
+    const b = document.createElement('button');
+    b.className = 'btn ' + (st.mode === m ? 'btn-red' : 'btn-outline') + ' btn-sm'; b.style.flex = '1'; b.textContent = label;
+    b.disabled = !amHost; b.onclick = () => socket.emit('setMode', { mode: m });
+    bt.appendChild(b);
+  });
+  document.getElementById('mode-note').textContent = amHost ? (mm ? 'Alle drie de minigames worden gespeeld, met een eindstand.' : 'Standaard: proeven, raden en minigames tussendoor.') : 'Alleen de host kiest de spelmodus.';
+  document.getElementById('products-card').style.display = mm ? 'none' : '';
+  document.getElementById('start-wrap').style.display = mm ? 'none' : '';
+  const mc = document.getElementById('mg-card'); mc.style.display = mm ? '' : 'none';
+  if (!mm) return;
+  const pk = document.getElementById('mg-pick'); pk.innerHTML = '';
+  Object.values(ARC_META).forEach(meta => {
+    pk.insertAdjacentHTML('beforeend', `<div class="rv-line" style="align-items:center"><span style="font-size:1.5rem">${meta.icon}</span><span style="flex:1;margin-left:10px;text-align:left"><b style="display:block">${esc(meta.title)}</b><span style="font-size:.75rem;color:#888">${esc(meta.tag)}</span></span></div>`);
+  });
+  if (amHost) {
+    const b = document.createElement('button'); b.className = 'btn btn-red'; b.style.marginTop = '12px'; b.textContent = '🚀 Start alle 3 minigames';
+    b.onclick = () => socket.emit('startMinigameRun'); pk.appendChild(b);
+  } else pk.insertAdjacentHTML('beforeend', `<p class="hint">⏳ Wachten tot ${esc(st.host)} de minigames start…</p>`);
+  document.getElementById('mg-standings').innerHTML = '<p class="hint">Alle drie de games worden achter elkaar gespeeld. Wie de meeste punten verzamelt (3/2/1 per game) wint.</p>';
 }
 function addFuet() {
   const inp = document.getElementById('fuet-input'), pr = document.getElementById('fuet-price');
@@ -2637,6 +2672,9 @@ function _arcShow(mg, v) {
 
 // ── Results ────────────────────────────────────────────────────────────────────
 function renderResultsScreen() {
+  const mmode = serverState.mode === 'minigames';
+  const rb = document.querySelector('#screen-results .btn-outline'); if (rb) rb.textContent = mmode ? '↩ Terug naar de lobby' : '🌶️ Nieuwe proeverij';
+  const rh = document.querySelector('#screen-results h1'); if (rh) rh.textContent = mmode ? 'Eindstand minigames!' : 'Uitslag!';
   const { shuffledOrder, scores } = serverState;
   const fuetScores = shuffledOrder.map(fuet => {
     const fs = scores[fuet.id] || {};

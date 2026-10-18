@@ -24,6 +24,7 @@ function attachGame(io) {
   const MAX_PRODUCTS = 20;
 
   const state = {
+    mode: 'tasting',           // 'tasting' (default: tasting + blind guess + minigames) | 'minigames' (minigames only)
     phase: 'setup',            // setup → tasting → scoreboard → (minigame) → … → results
     host: null,
     players: {},
@@ -250,8 +251,18 @@ function attachGame(io) {
       state.fuets = state.fuets.filter(f => f.id !== id);
       broadcast();
     });
+    socket.on('setMode', ({ mode }) => {
+      if (!isHost() || state.phase !== 'setup' || !['tasting', 'minigames'].includes(mode) || state.mode === mode) return;
+      state.mode = mode; state.minigameScores = {}; state.minigameIdx = 0;
+      broadcast();
+    });
+    socket.on('startMinigameRun', () => {                     // minigames-only: play all games in a row, then the final standings
+      if (!isHost() || state.phase !== 'setup' || state.mode !== 'minigames') return;
+      state.minigameScores = {}; state.minigameIdx = 0;
+      startMinigame(MINIGAME_SEQUENCE[state.minigameIdx++]);
+    });
     socket.on('startTasting', () => {
-      if (!isHost() || state.phase !== 'setup' || !state.fuets.length) return;
+      if (!isHost() || state.phase !== 'setup' || state.mode !== 'tasting' || !state.fuets.length) return;
       const shuffled = shuffleArray(state.fuets);
       state.shuffledOrder = shuffled.map((f, i) => ({ id: 'r' + i, fuetId: f.id, name: f.name, price: f.price }));
       Object.assign(state, { currentFuetIdx: 0, ratedPlayers: {}, scores: {}, guesses: {}, comments: {}, blindScores: {}, blindResults: {}, minigame: null, minigameScores: {}, minigameIdx: 0 });
@@ -322,7 +333,13 @@ function attachGame(io) {
           break;
         }
         case 'minigame':
-          if (state.minigame && state.minigame.status === 'reveal') advanceFuet();
+          if (state.minigame && state.minigame.status === 'reveal') {
+            if (state.mode === 'minigames') {
+              if (state.minigameIdx < MINIGAME_SEQUENCE.length) startMinigame(MINIGAME_SEQUENCE[state.minigameIdx++]);
+              else { state.minigame = null; state.phase = 'results'; broadcast(); }
+            }
+            else advanceFuet();
+          }
           break;
       }
     });
