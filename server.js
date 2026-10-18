@@ -68,7 +68,7 @@ function attachGame(io) {
       pub.comments[r.id] = state.comments[r.id] || [];
       if (state.blindResults[r.id]) pub.blindResults[r.id] = state.blindResults[r.id];
     });
-    if (forName && forName === state.host) pub.hostFuets = state.fuets;               // only the host sees the prices up front
+    if (forName && forName === state.host) { pub.hostFuets = state.fuets; pub.hostOrder = state.shuffledOrder.map(r => ({ id: r.id, name: r.name, price: r.price })); }               // only the host sees the prices up front
     return pub;
   }
   function broadcast() {
@@ -78,9 +78,17 @@ function attachGame(io) {
 
   function connectedNames() { return Object.entries(state.players).filter(([, p]) => p.connected).map(([n]) => n); }
   function curRound() { return state.shuffledOrder[state.currentFuetIdx]; }
+  function rnd(n) {                                                  // unbiased random int in [0, n)
+    try { const c = (typeof globalThis !== 'undefined' && globalThis.crypto) || require('crypto').webcrypto; const u = new Uint32Array(1); c.getRandomValues(u); return Math.floor(u[0] / 4294967296 * n); }
+    catch (e) { return Math.floor(Math.random() * n); }
+  }
   function shuffleArray(arr) {
-    const a = [...arr];
-    for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+    let a = [...arr];
+    for (let attempt = 0; attempt < 20; attempt++) {                  // Fisher-Yates; never return the entered order (when 2+ items)
+      a = [...arr];
+      for (let i = a.length - 1; i > 0; i--) { const j = rnd(i + 1); [a[i], a[j]] = [a[j], a[i]]; }
+      if (arr.length < 2 || a.some((x, i) => x !== arr[i])) break;
+    }
     return a;
   }
   function parsePrice(v) {

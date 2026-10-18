@@ -349,6 +349,10 @@ input:focus{border-color:#D94040}
 .comment-row .btn{width:auto;padding:0 18px}
 .slider-track.price{background:linear-gradient(to top,#2B6CB0 0%,#4DA3D8 55%,#9BDCF5 100%)}
 
+#serve-box{position:fixed;left:8px;top:max(8px,env(safe-area-inset-top));z-index:900;font-size:.75rem}
+#serve-btn{border:none;border-radius:16px;padding:6px 10px;background:rgba(255,255,255,.75);box-shadow:0 1px 6px rgba(0,0,0,.25);font-weight:700;font-size:.75rem;cursor:pointer;opacity:.85}
+#serve-info{margin-top:6px;background:rgba(255,255,255,.95);color:#2D1B00;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.3);max-width:70vw}
+body.arc-running #serve-box{display:none!important}
 #settings-btn{position:fixed;top:max(8px,env(safe-area-inset-top));right:8px;z-index:900;width:32px;height:32px;border-radius:50%;border:none;background:rgba(255,255,255,.75);box-shadow:0 1px 6px rgba(0,0,0,.25);font-size:1rem;line-height:1;cursor:pointer;padding:0;opacity:.8}
 body.arc-running #settings-btn{display:none!important}
 #settings-modal{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px}
@@ -372,6 +376,7 @@ body.arc-running #settings-btn{display:none!important}
 
 
 <!-- IDENTITY -->
+<div id="serve-box" style="display:none"><button onclick="toggleServe()" id="serve-btn">👁 Serveer</button><div id="serve-info" style="display:none"></div></div>
 <button id="settings-btn" onclick="openSettings()" aria-label="Instellingen" style="display:none">⚙️</button>
 <div id="settings-modal" style="display:none">
   <div class="set-card">
@@ -650,6 +655,18 @@ let _curlingAim = null;
 const socket = io();
 
 socket.on('connect', () => { if (myName) socket.emit('join', { name: myName, photoIdx: 0 }); });
+let _serveOpen = false;
+function toggleServe() { _serveOpen = !_serveOpen; updateServeBox(); }
+function updateServeBox() {                                   // host only: which chips to serve (hidden unless you tap — the host tastes blind too)
+  const st = serverState, box = document.getElementById('serve-box');
+  const on = st && st.host === myName && st.phase === 'tasting' && st.hostOrder;
+  box.style.display = on ? 'block' : 'none';
+  if (!on) return;
+  const i = st.currentFuetIdx, cur = st.hostOrder[i], nxt = st.hostOrder[i + 1];
+  const info = document.getElementById('serve-info');
+  info.style.display = _serveOpen ? 'block' : 'none';
+  info.innerHTML = `<b>Nu serveren (${i + 1}/${st.hostOrder.length}):</b> ${esc(cur ? cur.name : '')}${nxt ? `<br><span style="color:#888">Daarna: ${esc(nxt.name)}</span>` : ''}`;
+}
 let _seenInGame = false;
 socket.on('stateUpdate', (st) => {
   serverState = st;
@@ -659,6 +676,7 @@ socket.on('stateUpdate', (st) => {
     showScreen('identity'); return;
   }
   renderUI();
+  updateServeBox();
 });
 socket.on('reaction', ({ name, emoji }) => showReactionFloat(name, emoji));
 
