@@ -320,7 +320,7 @@ input:focus{border-color:#D94040}
 
 /* ── Host / products / blind guess / reveal / comments ── */
 .price-row{display:flex;gap:8px;align-items:center}
-.price-row #fuet-price{max-width:96px;text-align:center}
+.price-row #fuet-price{max-width:84px;text-align:center}
 .hint{font-size:.78rem;color:#888;margin-top:8px}
 .host-badge{position:absolute;top:-7px;left:-5px;font-size:1.05rem;line-height:1;background:#FFD23C;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.25)}
 .lobby-player .host-btn{position:absolute;top:-5px;left:-5px;background:#fff;color:#2D1B00;border:1.5px solid #FFD23C;border-radius:50%;width:24px;height:24px;font-size:.75rem;cursor:pointer;display:flex;align-items:center;justify-content:center}
@@ -349,10 +349,6 @@ input:focus{border-color:#D94040}
 .comment-row .btn{width:auto;padding:0 18px}
 .slider-track.price{background:linear-gradient(to top,#2B6CB0 0%,#4DA3D8 55%,#9BDCF5 100%)}
 
-#serve-box{position:fixed;left:8px;top:max(8px,env(safe-area-inset-top));z-index:900;font-size:.75rem}
-#serve-btn{border:none;border-radius:16px;padding:6px 10px;background:rgba(255,255,255,.75);box-shadow:0 1px 6px rgba(0,0,0,.25);font-weight:700;font-size:.75rem;cursor:pointer;opacity:.85}
-#serve-info{margin-top:6px;background:rgba(255,255,255,.95);color:#2D1B00;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.3);max-width:70vw}
-body.arc-running #serve-box{display:none!important}
 #settings-btn{position:fixed;top:max(8px,env(safe-area-inset-top));right:8px;z-index:900;width:32px;height:32px;border-radius:50%;border:none;background:rgba(255,255,255,.75);box-shadow:0 1px 6px rgba(0,0,0,.25);font-size:1rem;line-height:1;cursor:pointer;padding:0;opacity:.8}
 body.arc-running #settings-btn{display:none!important}
 #settings-modal{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px}
@@ -376,7 +372,6 @@ body.arc-running #settings-btn{display:none!important}
 
 
 <!-- IDENTITY -->
-<div id="serve-box" style="display:none"><button onclick="toggleServe()" id="serve-btn">👁 Serveer</button><div id="serve-info" style="display:none"></div></div>
 <button id="settings-btn" onclick="openSettings()" aria-label="Instellingen" style="display:none">⚙️</button>
 <div id="settings-modal" style="display:none">
   <div class="set-card">
@@ -444,6 +439,7 @@ body.arc-running #settings-btn{display:none!important}
     <h2 style="margin-bottom:12px" id="products-title">Producten</h2>
     <div id="host-add" style="display:none">
       <div class="price-row">
+        <input type="text" id="fuet-bin" inputmode="numeric" placeholder="Bak #" maxlength="2" style="max-width:70px;text-align:center"/>
         <input type="text" id="fuet-input" placeholder="Naam van het product..." maxlength="40"/>
         <input type="text" id="fuet-price" inputmode="decimal" placeholder="€ prijs" maxlength="6"/>
       </div>
@@ -655,18 +651,6 @@ let _curlingAim = null;
 const socket = io();
 
 socket.on('connect', () => { if (myName) socket.emit('join', { name: myName, photoIdx: 0 }); });
-let _serveOpen = false;
-function toggleServe() { _serveOpen = !_serveOpen; updateServeBox(); }
-function updateServeBox() {                                   // host only: which chips to serve (hidden unless you tap — the host tastes blind too)
-  const st = serverState, box = document.getElementById('serve-box');
-  const on = st && st.host === myName && st.phase === 'tasting' && st.hostOrder;
-  box.style.display = on ? 'block' : 'none';
-  if (!on) return;
-  const i = st.currentFuetIdx, cur = st.hostOrder[i], nxt = st.hostOrder[i + 1];
-  const info = document.getElementById('serve-info');
-  info.style.display = _serveOpen ? 'block' : 'none';
-  info.innerHTML = `<b>Nu serveren (${i + 1}/${st.hostOrder.length}):</b> ${esc(cur ? cur.name : '')}${nxt ? `<br><span style="color:#888">Daarna: ${esc(nxt.name)}</span>` : ''}`;
-}
 let _seenInGame = false;
 socket.on('stateUpdate', (st) => {
   serverState = st;
@@ -676,7 +660,6 @@ socket.on('stateUpdate', (st) => {
     showScreen('identity'); return;
   }
   renderUI();
-  updateServeBox();
 });
 socket.on('reaction', ({ name, emoji }) => showReactionFloat(name, emoji));
 
@@ -796,10 +779,14 @@ function renderSetupScreen() {
   (st.hostFuets || []).forEach(f => { priceOf[f.id] = f.price; });
   const ft = document.getElementById('fuet-tags');
   ft.innerHTML = '';
-  (st.fuets || []).forEach(f => {
+  const binOf = {};
+  (st.hostFuets || []).forEach(f => { binOf[f.id] = f.bin; });
+  const fl = (st.fuets || []).slice();
+  if (amHost) fl.sort((a, b) => (binOf[a.id] || 0) - (binOf[b.id] || 0));
+  fl.forEach(f => {
     const tag = document.createElement('div'); tag.className = 'tag';
     const pr = priceOf[f.id];
-    tag.innerHTML = `${esc(f.name)}${amHost ? ` <small>${pr != null ? fmtEuro(pr) : 'geen prijs'}</small>` : ''}`;
+    tag.innerHTML = `${amHost && binOf[f.id] ? '<b>#' + binOf[f.id] + '</b> ' : ''}${esc(f.name)}${amHost ? ` <small>${pr != null ? fmtEuro(pr) : 'geen prijs'}</small>` : ''}`;
     if (amHost) { const x = document.createElement('button'); x.textContent = '✕'; x.onclick = () => socket.emit('removeFuet', { id: f.id }); tag.appendChild(x); }
     ft.appendChild(tag);
   });
@@ -836,11 +823,13 @@ function renderModeUI() {
   document.getElementById('mg-standings').innerHTML = '<p class="hint">Alle drie de games worden achter elkaar gespeeld. Wie de meeste punten verzamelt (3/2/1 per game) wint.</p>';
 }
 function addFuet() {
-  const inp = document.getElementById('fuet-input'), pr = document.getElementById('fuet-price');
+  const inp = document.getElementById('fuet-input'), pr = document.getElementById('fuet-price'), bn = document.getElementById('fuet-bin');
   const name = inp.value.trim(); if (!name) return;
-  socket.emit('addFuet', { name, price: pr.value.trim() });
-  inp.value = ''; pr.value = ''; inp.focus();
+  socket.emit('addFuet', { name, price: pr.value.trim(), bin: bn.value.trim() });
+  inp.value = ''; pr.value = ''; bn.value = ''; inp.focus();
 }
+socket.on('fuetError', ({ message }) => { const h = document.querySelector('#host-add .hint'); if (h) { h.textContent = '⚠️ ' + message; setTimeout(() => { h.textContent = '🔒 De prijs blijft geheim voor de anderen tot na de ronde.'; }, 3000); } });
+document.getElementById('fuet-bin').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('fuet-input').focus(); });
 document.getElementById('fuet-input').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('fuet-price').focus(); });
 document.getElementById('fuet-price').addEventListener('keydown', e => { if (e.key === 'Enter') addFuet(); });
 function startTasting() { socket.emit('startTasting'); }
@@ -912,7 +901,8 @@ function renderRatingCat() {
 
   document.getElementById('rating-fuet-sub').textContent =
     `Chips ${serverState.currentFuetIdx + 1} van ${serverState.shuffledOrder.length}`;
-  document.getElementById('rating-fuet-name').textContent = '🕵️ Blind proeven';
+  const curRound = serverState.shuffledOrder[serverState.currentFuetIdx] || {};
+  document.getElementById('rating-fuet-name').textContent = curRound.bin ? '🥣 Bakje ' + curRound.bin : '🕵️ Blind proeven';
 
   // Progress dots
   const dots = document.getElementById('cat-dots');
@@ -1035,7 +1025,7 @@ function renderGuessScreen() {
   const pg = _pendingGuess, st = serverState;
   if (!pg) return;
   const used = (st.shuffledOrder || []).filter(r => r.fuetId).map(r => r.fuetId);
-  document.getElementById('guess-sub').textContent = `Chips ${st.currentFuetIdx + 1} van ${st.shuffledOrder.length} · wat denk jij dat je net at?`;
+  document.getElementById('guess-sub').textContent = `${(st.shuffledOrder[st.currentFuetIdx] || {}).bin ? 'Bakje ' + st.shuffledOrder[st.currentFuetIdx].bin + ' · ' : ''}Chips ${st.currentFuetIdx + 1} van ${st.shuffledOrder.length} · wat zat er in dit bakje?`;
   const list = document.getElementById('guess-list');
   list.innerHTML = '';
   (st.fuets || []).forEach(f => {
@@ -1174,7 +1164,7 @@ function renderScoreboardScreen() {
     const g = guessesNow[n], ok = correct.includes(n);
     return `<div class="rv-guess"><span>${ok ? '✅' : '❌'}</span><span><b>${esc(n)}</b> ${ok ? 'wist het!' : (g ? 'dacht: ' + esc(nameOf(g) || '?') : 'gokte niet')}${typeof sc[n].prijs === 'number' ? ` · prijs-gok ${fmtEuro(sc[n].prijs)}` : ''}</span></div>`;
   }).join('');
-  document.getElementById('reveal-card').innerHTML = `<div class="rv-top"><div class="rv-label">Dit was product ${currentFuetIdx + 1}</div><div class="rv-name">${esc(round.name || '?')}</div></div>
+  document.getElementById('reveal-card').innerHTML = `<div class="rv-top"><div class="rv-label">${round.bin ? 'Bakje ' + round.bin : 'Dit was product ' + (currentFuetIdx + 1)}</div><div class="rv-name">${esc(round.name || '?')}</div></div>
     ${priceHTML}
     <div class="sec-h" style="margin-top:12px">🕵️ Blind gokken (${correct.length}/${Object.keys(sc).length} goed)</div>${guessRows}`;
 

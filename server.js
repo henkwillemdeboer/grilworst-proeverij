@@ -57,7 +57,7 @@ function attachGame(io) {
     Object.keys(state).forEach(k => { if (!['fuets', 'shuffledOrder', 'guesses', 'comments', 'blindResults'].includes(k)) rest[k] = state[k]; });
     const pub = Object.assign(rest, {
       fuets: state.fuets.map(f => ({ id: f.id, name: f.name })),                      // names only: these are the answer options
-      shuffledOrder: state.shuffledOrder.map((r, i) => revealed(i) ? { id: r.id, fuetId: r.fuetId, name: r.name, price: r.price } : { id: r.id }),
+      shuffledOrder: state.shuffledOrder.map((r, i) => revealed(i) ? { id: r.id, fuetId: r.fuetId, name: r.name, price: r.price, bin: r.bin } : (i <= state.currentFuetIdx ? { id: r.id, bin: r.bin } : { id: r.id })),   // the bakje number of the current round is public; the contents are not
       guesses: {}, comments: {}, blindResults: {},
     });
     const cur = state.shuffledOrder[state.currentFuetIdx];
@@ -68,7 +68,7 @@ function attachGame(io) {
       pub.comments[r.id] = state.comments[r.id] || [];
       if (state.blindResults[r.id]) pub.blindResults[r.id] = state.blindResults[r.id];
     });
-    if (forName && forName === state.host) { pub.hostFuets = state.fuets; pub.hostOrder = state.shuffledOrder.map(r => ({ id: r.id, name: r.name, price: r.price })); }               // only the host sees the prices up front
+    if (forName && forName === state.host) { pub.hostFuets = state.fuets; }               // only the host sees the prices up front
     return pub;
   }
   function broadcast() {
@@ -246,12 +246,16 @@ function attachGame(io) {
     });
 
     // ── Host-only: products, start, kick, reset, skip ──
-    socket.on('addFuet', ({ name, price }) => {
+    socket.on('addFuet', ({ name, price, bin }) => {
       if (!isHost() || state.phase !== 'setup') return;
       name = String(name || '').trim().slice(0, 40);
       if (!name || state.fuets.length >= MAX_PRODUCTS) return;
+      const used = new Set(state.fuets.map(f => f.bin));
+      let b = parseInt(bin, 10);
+      if (!isFinite(b) || b < 1 || b > 99) { b = 1; while (used.has(b)) b++; }                      // no number given → next free bakje
+      else if (used.has(b)) { socket.emit('fuetError', { message: 'Bakje ' + b + ' is al in gebruik' }); return; }
       const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      state.fuets.push({ id, name, price: parsePrice(price) });
+      state.fuets.push({ id, name, price: parsePrice(price), bin: b });
       broadcast();
     });
     socket.on('removeFuet', ({ id }) => {
@@ -272,7 +276,7 @@ function attachGame(io) {
     socket.on('startTasting', () => {
       if (!isHost() || state.phase !== 'setup' || state.mode !== 'tasting' || !state.fuets.length) return;
       const shuffled = shuffleArray(state.fuets);
-      state.shuffledOrder = shuffled.map((f, i) => ({ id: 'r' + i, fuetId: f.id, name: f.name, price: f.price }));
+      state.shuffledOrder = shuffled.map((f, i) => ({ id: 'r' + i, fuetId: f.id, name: f.name, price: f.price, bin: f.bin }));
       Object.assign(state, { currentFuetIdx: 0, ratedPlayers: {}, scores: {}, guesses: {}, comments: {}, blindScores: {}, blindResults: {}, minigame: null, minigameScores: {}, minigameIdx: 0 });
       state.phase = 'tasting';
       broadcast();
