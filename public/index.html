@@ -650,7 +650,16 @@ let _curlingAim = null;
 const socket = io();
 
 socket.on('connect', () => { if (myName) socket.emit('join', { name: myName, photoIdx: 0 }); });
-socket.on('stateUpdate', (st) => { serverState = st; renderUI(); });
+let _seenInGame = false;
+socket.on('stateUpdate', (st) => {
+  serverState = st;
+  if (myName && st.players && st.players[myName]) _seenInGame = true;
+  else if (myName && _seenInGame && st.players && !st.players[myName]) {          // removed by another player
+    _seenInGame = false; sessionStorage.removeItem('myName'); myName = null; _pendingGuess = null;
+    showScreen('identity'); return;
+  }
+  renderUI();
+});
 socket.on('reaction', ({ name, emoji }) => showReactionFloat(name, emoji));
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -744,9 +753,10 @@ function renderSetupScreen() {
       <div class="lobby-dot ${p.connected ? 'online' : ''}"></div>
       <div class="lobby-player-name">${esc(name)}${isMe ? ' 👈' : ''}</div>`;
     if (isHostP) { const b = document.createElement('div'); b.className = 'host-badge'; b.textContent = '👑'; item.appendChild(b); }
-    if (amHost && !isMe) {
+    if (!isMe) {
       const k = document.createElement('button'); k.className = 'kick-btn'; k.textContent = '✕'; k.title = 'Verwijder';
-      k.onclick = () => kickPlayer(name); item.appendChild(k);
+      k.onclick = () => { if (confirm(name + ' verwijderen?')) kickPlayer(name); }; item.appendChild(k);
+      if (!amHost) return pl.appendChild(item);
       const h = document.createElement('button'); h.className = 'host-btn'; h.textContent = '👑'; h.title = 'Maak host';
       h.onclick = () => { if (confirm(name + ' host maken?')) setHost(name); }; item.appendChild(h);
     }
@@ -1284,12 +1294,13 @@ const ARC_META = {
     ]
   },
   bike_race: {
-    icon: '🚲', title: 'Chip Bike Race', tag: 'Racen op chipwielen · snelste tijd wint',
+    icon: '🚲', title: 'Chip Bike Race', tag: 'Racen op chipwielen · salto\'s geven tijdbonus',
     rules: [
       ['🌶️', 'GAS om te rijden, REM om af te remmen'],
       ['↺↻', 'In de lucht: ACHTER tilt je neus op, VOOR duwt hem omlaag. Land op je wielen!'],
       ['⛰️', 'Rijd over heuvels en ramps. Landt hij op zijn hoofd, dan crasht hij'],
-      ['💥', 'Elke crash kost 3 seconden en je start bij het laatste checkpoint'],
+      ['🤸', 'SALTO\'S! Een hele rol voorover of achterover in de lucht en netjes landen = 4 seconden eraf (twee in één sprong: 6 seconden per salto). Dat is HEEL veel bonus'],
+      ['💥', 'Elke crash kost 2 seconden en je start bij het laatste checkpoint. Zonder sturen richt hij zichzelf een beetje op'],
       ['🏁', 'Haal de finish zo snel mogelijk. Wie niet finisht, wordt gerangschikt op afstand']
     ]
   }
@@ -1806,7 +1817,7 @@ function createEatingGame(canvas, opts) {
   const g = {
     phase: 'countdown', cd: 3, lastCd: 4, t: 0, over: false, paused: false,
     eaten: 0, taps: 0, giants: 0, burps: 0, chokes: 0, chew: 0, chewV: 0, cheeks: 0,
-    giantAt: 5 + Math.floor(rng() * 3), giant: null, choke: 0, chokeAt: 24 + Math.floor(rng() * 14),
+    praiseAt: 20, giantAt: 5 + Math.floor(rng() * 3), giant: null, choke: 0, chokeAt: 24 + Math.floor(rng() * 14),
     rate: 0, lastTap: -9, tapTimes: [], maxRate: 0, bite: 0, squash: 0, hand: 0, burp: 0,
     flying: [], parts: [], pops: [], shake: 0, bg: 0, wob: 0
   };
@@ -1831,6 +1842,11 @@ function createEatingGame(canvas, opts) {
       g.flying.push({ x0: sx, y0: 520, t: 0, dur: .13, gold: false });
       arcSfx('munch');
       if (g.taps >= g.giantAt) g.giant = { left: 4, bite: 0 };
+    }
+    if (g.eaten >= g.praiseAt) {                            // lots of clicks → praise from the chairman
+      g.praiseAt += 20 + Math.floor(g.praiseAt / 4);
+      pop(W / 2, 212, 'LEKKER VOORZITTER!', '#FFE45C', 28); arcSfx('score');
+      _fxBurst(g.parts, W / 2, 190, 18, ['#FFE45C', '#fff', '#F08A24'], 300);
     }
     if (g.taps >= g.chokeAt) {                            // crumbs down the wrong pipe — same moment for every player
       g.choke = .75; g.chokes++; g.chokeAt = g.taps + 30 + Math.floor(rng() * 25);
@@ -2169,7 +2185,7 @@ function createChipocalypseGame(canvas, opts) {
 function createBikeGame(canvas, opts) {
   const W = ARC_W, H = ARC_H, ctx = canvas.getContext('2d');
   const rng = _rng(opts.seed);
-  const STEP = 8, R = 15, L = 58, G = 1500, Y0 = 400, COURSE = 9000, FINISH = COURSE - 260, TIME_CAP = 75, PENALTY = 3, Z = .9;
+  const STEP = 8, R = 15, L = 58, G = 1500, Y0 = 400, COURSE = 9000, FINISH = COURSE - 260, TIME_CAP = 90, PENALTY = 2, FLIP_BONUS = 4, Z = .9;
   const SPR = _ballSprite(R, 'reg'), BIG = _ballSprite(30, 'reg');
   // ── course (identical for everyone: same seed) ──
   const ys = [];
@@ -2178,9 +2194,9 @@ function createBikeGame(canvas, opts) {
     add(320, () => 0);
     while (ys.length * STEP < COURSE - 700) {
       const r = rng();
-      if (r < .3) { const a = 60 + rng() * 60; add(260 + rng() * 150, t => -a * Math.pow(Math.sin(Math.PI * t), 2)); }
-      else if (r < .58) { const h = 75 + rng() * 75, len = 150 + rng() * 70; add(len, t => t < .86 ? -h * (t / .86) : -h * (1 - (t - .86) / .14)); add(110 + rng() * 60, () => 0); }
-      else if (r < .8) { const a = 18 + rng() * 14, len = 240 + rng() * 120, nn = Math.round(len / 55); add(len, t => -a * Math.pow(Math.sin(Math.PI * nn * t), 2)); }
+      if (r < .3) { const a = 40 + rng() * 45; add(300 + rng() * 150, t => -a * Math.pow(Math.sin(Math.PI * t), 2)); }
+      else if (r < .58) { const h = 120 + rng() * 70, len = 200 + rng() * 60; add(len, t => t < .86 ? -h * (t / .86) : -h * (1 - (t - .86) / .14)); add(110 + rng() * 60, () => 0); }
+      else if (r < .8) { const a = 10 + rng() * 10, len = 240 + rng() * 120, nn = Math.round(len / 62); add(len, t => -a * Math.pow(Math.sin(Math.PI * nn * t), 2)); }
       else add(130 + rng() * 80, () => 0);
     }
     add(COURSE - ys.length * STEP + 600, () => 0);
@@ -2196,7 +2212,7 @@ function createBikeGame(canvas, opts) {
     w: [{ x: 0, y: 0, vx: 0, vy: 0, c: false, spin: 0 }, { x: 0, y: 0, vx: 0, vy: 0, c: false, spin: 0 }],
     gas: false, brake: false, back: false, fwd: false, ptr: {}, keys: {},
     crashT: 0, crashes: 0, pen: 0, cpX: 40, maxX: 0, finished: false, finT: 0, ragdoll: null, airT: 0, bestAir: 0,
-    camX: 0, camY: 0, parts: [], pops: [], shake: 0, pedal: 0, wind: 0, flip: 0
+    camX: 0, camY: 0, parts: [], pops: [], shake: 0, pedal: 0, wind: 0, flip: 0, flips: 0, bonus: 0, pend: 0, rot: 0, lastAng: 0, prevAir: false
   };
   function place(x) {
     g.w[0].x = x; g.w[1].x = x + L;
@@ -2226,8 +2242,8 @@ function createBikeGame(canvas, opts) {
   function totalMs() { return Math.round((g.t + g.pen) * 1000); }
   g.result = function () {
     const pct = Math.max(0, Math.min(100, Math.round(g.maxX / FINISH * 100)));
-    const ms = Math.min(120000, totalMs());
-    return { score: g.finished ? 200000 - ms : Math.round(pct * 190), stats: { ms, crashes: g.crashes, finished: g.finished ? 1 : 0, pct, air: Math.round(g.bestAir * 1000) } };
+    const ms = Math.min(100000, totalMs()), bonus = Math.round(g.bonus), net = Math.max(-100000, Math.min(100000, ms - bonus * 1000));
+    return { score: g.finished ? 300000 - net : Math.round(pct * 190), stats: { ms, bonus, crashes: g.crashes, finished: g.finished ? 1 : 0, pct, air: Math.round(g.bestAir * 1000), flips: g.flips } };
   };
 
   function bikeVec() { const a = g.w[0], b = g.w[1]; const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1; return { ax: dx / l, ay: dy / l, ang: Math.atan2(dy, dx), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; }
@@ -2235,7 +2251,7 @@ function createBikeGame(canvas, opts) {
   function crash() {
     if (g.crashT > 0) return;
     const hp = headPos(), v = bikeVec(), vx = (g.w[0].vx + g.w[1].vx) / 2, vy = (g.w[0].vy + g.w[1].vy) / 2;
-    g.crashT = 1.5; g.crashes++; g.pen += PENALTY; g.shake = .4; arcSfx('crash');
+    g.crashT = 1.5; g.crashes++; g.pen += PENALTY; g.pend = 0; g.rot = 0; g.shake = .4; arcSfx('crash');
     g.ragdoll = [
       { k: 'head', x: hp.x, y: hp.y, vx: vx * .9 + 60, vy: vy - 280, r: 0, vr: 7, rad: 14 },
       { k: 'torso', x: v.mx + v.ay * 34, y: v.my - v.ax * 34, vx: vx * .8, vy: vy - 180, r: 0, vr: -5, rad: 12 },
@@ -2253,7 +2269,7 @@ function createBikeGame(canvas, opts) {
     const grounded = a.c || b.c;
     if (g.gas) { [a].forEach(w => { if (w.c) { const sl = slopeAt(w.x), tl = Math.hypot(1, sl); w.vx += (1 / tl) * 800 * dt; w.vy += (sl / tl) * 800 * dt; } }); if (!grounded) { /* rear wheel spin pitches the nose up a little */ a.vy += v.ax * 90 * dt; b.vy -= v.ax * 90 * dt; } }
     if (g.brake && grounded) [a, b].forEach(w => { if (w.c) { const k = Math.max(0, 1 - 7 * dt); w.vx *= k; w.vy *= k; } });
-    const T = grounded ? 520 : 1000;
+    const T = grounded ? 650 : 1300;
     const nx = -v.ay, ny = v.ax;                            // points "down" relative to the bike (clockwise)
     if (g.fwd) { b.vx += nx * T * dt; b.vy += ny * T * dt; a.vx -= nx * T * dt; a.vy -= ny * T * dt; }
     if (g.back) { b.vx -= nx * T * dt; b.vy -= ny * T * dt; a.vx += nx * T * dt; a.vy += ny * T * dt; }
@@ -2301,8 +2317,39 @@ function createBikeGame(canvas, opts) {
     if (a.c && b.c && b.x > g.cpX + 260) g.cpX = Math.max(40, b.x - L - 20);
     if (a.c || b.c) { if (g.airT > g.bestAir) g.bestAir = g.airT; g.airT = 0; } else g.airT += dt;
     if (!a.c && !b.c && g.airT > .5) g.flip += 0;
+    // ── somersaults: count full rotations in the air, pay out the bonus on a safe landing ──
+    const ang = Math.atan2(b.y - a.y, b.x - a.x), air = !a.c && !b.c;
+    if (air) {
+      let d = ang - g.lastAng; if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI;
+      if (g.prevAir) {
+        g.rot += d;
+        if (Math.abs(g.rot) >= 2 * Math.PI * .8) {
+          const front = g.rot > 0; g.rot -= Math.sign(g.rot) * 2 * Math.PI; g.pend++;
+          pop(b.x, b.y - 70 - g.pend * 4, (front ? 'VOOROVER' : 'ACHTEROVER') + ' SALTO!', '#FFD23C', 22); arcSfx('golden');
+          _fxBurst(g.parts, b.x, b.y - 30, 14, ['#FFD23C', '#fff', '#F08A24'], 260);
+        }
+      }
+      // no steering → the spin dies out by itself (hold ↺/↻ to rotate, let go to stop) + gentle auto-levelling
+      if (!g.fwd && !g.back) {
+        const nx3 = -v.ay, ny3 = v.ax, om = ((b.vx - a.vx) * nx3 + (b.vy - a.vy) * ny3) / L, kd = 3.5 * om * (L / 2) * dt;
+        b.vx -= nx3 * kd; b.vy -= ny3 * kd; a.vx += nx3 * kd; a.vy += ny3 * kd;
+      }
+      if (!g.fwd && !g.back && Math.abs(g.rot) < .9) {
+        const sl = Math.atan(slopeAt(b.x)); let e = sl - ang; if (e > Math.PI) e -= 2 * Math.PI; if (e < -Math.PI) e += 2 * Math.PI;
+        if (Math.abs(e) < 1.2) { const k = e * 260 * dt, nx2 = -v.ay, ny2 = v.ax; b.vx += nx2 * k; b.vy += ny2 * k; a.vx -= nx2 * k; a.vy -= ny2 * k; }
+      }
+    } else if (g.prevAir) {
+      if (g.pend > 0) {
+        g.flips += g.pend; const bn = g.pend * FLIP_BONUS * (g.pend > 1 ? 1.5 : 1); g.bonus += bn;
+        pop(b.x, b.y - 100, (g.pend > 1 ? g.pend + '× SALTO! ' : 'SALTO! ') + '−' + Math.round(bn) + 's', '#7CFF9A', 28); arcSfx('score');
+        _fxBurst(g.parts, b.x, b.y - 40, 30, ['#7CFF9A', '#FFD23C', '#fff'], 340);
+        g.pend = 0;
+      }
+      g.rot = 0;
+    }
+    g.lastAng = ang; g.prevAir = air;
     const hp = headPos();
-    if (hp.y + 9 > hAt(hp.x) || hp.y > hAt(hp.x) - 4) crash();
+    if (hp.y + 5 > hAt(hp.x)) crash();
     if (b.x >= FINISH) { g.finished = true; g.maxX = FINISH; arcSfx('golden'); pop(b.x, b.y - 90, 'FINISH!', '#FFD23C', 30); _fxBurst(g.parts, b.x, b.y - 40, 40, ['#FFD23C', '#e0452f', '#fff', '#F08A24'], 400); }
     if (g.gas && (a.c)) { if (Math.random() < dt * 40) g.parts.push({ x: a.x - 10, y: a.y + R - 2, vx: -80 - Math.random() * 60, vy: -30 - Math.random() * 50, life: .5, max: .6, color: Math.random() < .5 ? '#e0452f' : '#ffb347', size: 2 + Math.random() * 3 }); }
     updCam(dt);
@@ -2423,9 +2470,9 @@ function createBikeGame(canvas, opts) {
     ctx.restore();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     // HUD
-    const tm = Math.min(TIME_CAP, g.t + g.pen);
+    const tm = Math.max(-99, Math.min(TIME_CAP, g.t + g.pen - g.bonus));
     _hudText(ctx, tm.toFixed(2) + 's', 14, 40, 30, '#fff', 'left');
-    _hudText(ctx, g.crashes ? '💥 ' + g.crashes + '× (+' + (g.crashes * PENALTY) + 's)' : 'nog geen crashes', 14, 58, 12, '#fff3d6', 'left');
+    _hudText(ctx, (g.crashes ? '💥 ' + g.crashes + '× ' : '') + (g.flips ? '🤸 ' + g.flips + '× (−' + Math.round(g.bonus) + 's)' : (g.crashes ? '' : 'doe een salto = bonus!')), 14, 58, 12, '#fff3d6', 'left');
     const pr = Math.min(1, g.maxX / FINISH);
     ctx.fillStyle = 'rgba(0,0,0,.3)'; _rr(ctx, W - 124, 24, 110, 10, 5); ctx.fill();
     ctx.fillStyle = '#FFD23C'; _rr(ctx, W - 124, 24, Math.max(8, 110 * pr), 10, 5); ctx.fill();
@@ -2576,8 +2623,9 @@ function _arcAchievements(mg) {
     a = best('chips', 40); if (a) out.push({ i: '🌶️', t: 'Chips-verzamelaar', n: a.n, d: a.v + ' chips' });
     names.forEach(n => { const s = st[n] || {}; if ((s.dist || 0) >= 300 && !s.hits) out.push({ i: '💎', t: 'Onraakbaar', n, d: 'ver gekomen zonder hit' }); });
   } else {
+    let a = best('flips', 1); if (a) out.push({ i: '🤸', t: 'Salto King', n: a.n, d: a.v + '× salto' });
     names.forEach(n => { const s = st[n] || {}; if (s.finished && !s.crashes) out.push({ i: '💎', t: 'Clean Run', n, d: 'gefinisht zonder crash' }); });
-    let a = best('air', 1200); if (a) out.push({ i: '🚀', t: 'Stuntman', n: a.n, d: (a.v / 1000).toFixed(1) + ' s in de lucht' });
+    a = best('air', 1200); if (a) out.push({ i: '🚀', t: 'Stuntman', n: a.n, d: (a.v / 1000).toFixed(1) + ' s in de lucht' });
     a = best('crashes', 3); if (a) out.push({ i: '🤕', t: 'Crashtestdummy', n: a.n, d: a.v + '× gecrasht' });
   }
   return out;
@@ -2657,7 +2705,7 @@ function _renderArcade(el, mg) {
       const s = (mg.stats || {})[n] || {};
       if (mg.type === 'chip_eating') return `${v} chips · ${s.giants || 0}× extra groot · ${s.burps || 0}× boer`;
       if (mg.type === 'chipocalypse') return `${v} pts · ${s.dist || 0} m · ${s.chips || 0} chips`;
-      if (s.finished) return `${(s.ms / 1000).toFixed(2)} s · ${s.crashes || 0}× crash`;
+      if (s.finished) return `${((s.ms - (s.bonus || 0) * 1000) / 1000).toFixed(2)} s netto (${(s.ms / 1000).toFixed(1)} − ${s.bonus || 0} bonus) · ${s.flips || 0}× salto · ${s.crashes || 0}× crash`;
       return `niet gefinisht (${s.pct || 0}%) · ${s.crashes || 0}× crash`;
     }, _arcAchievementsHTML(mg));
   }
@@ -2666,7 +2714,7 @@ function _renderArcade(el, mg) {
 function _arcShow(mg, v) {
   if (mg.type !== 'bike_race') return v;
   const s = (mg.stats || {})[myName] || (_arcLocal && _arcLocal.final && _arcLocal.final.stats) || {};
-  return s.finished ? (s.ms / 1000).toFixed(2) + ' s' : (s.pct || Math.round(v / 190)) + '%';
+  return s.finished ? ((s.ms - (s.bonus || 0) * 1000) / 1000).toFixed(2) + ' s' : (s.pct || Math.round(v / 190)) + '%';
 }
 
 

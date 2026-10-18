@@ -19,7 +19,7 @@ function attachGame(io) {
   // with the same seed; highest score wins 3/2/1 points).
   const MINIGAME_EVERY = 4;          // a minigame after every 4th product
   const MINIGAME_SEQUENCE = ['chip_eating', 'chipocalypse', 'bike_race'];
-  const ARCADE_MAX = { chip_eating: 600, chipocalypse: 20000, bike_race: 200000 };
+  const ARCADE_MAX = { chip_eating: 600, chipocalypse: 20000, bike_race: 450000 };
   const TASTE_KEYS = ['geur', 'stevigheid', 'smaak', 'textuur', 'uiterlijk', 'nasmaak'];
   const MAX_PRODUCTS = 20;
 
@@ -270,8 +270,11 @@ function attachGame(io) {
       broadcast();
     });
     socket.on('kickPlayer', ({ name }) => {
-      if (!isHost() || name === state.host) return;
-      if (state.players[name]) { delete state.players[name]; broadcast(); }
+      if (!me() || !state.players[me()] || !state.players[name]) return;            // any player may remove another player
+      delete state.players[name];
+      Object.values(state.ratedPlayers).forEach(a => { const i = a.indexOf(name); if (i >= 0) a.splice(i, 1); });
+      if (state.host === name) state.host = Object.keys(state.players).find(k => state.players[k].connected) || Object.keys(state.players)[0] || null;   // new host
+      broadcast();
     });
     socket.on('setHost', ({ name }) => {
       if (!isHost() || !state.players[name]) return;
