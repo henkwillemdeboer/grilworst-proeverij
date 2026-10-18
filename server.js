@@ -8,385 +8,365 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── Wildcard questions ────────────────────────────────────────────────────────
-const WILDCARDS = [
-  {q:"Eerste date-waardig?",       left:"Wegrennen 🏃", right:"Romantisch 💍"},
-  {q:"Oma-approval rating",        left:"Schande 😤",   right:"Trots 🥹"},
-  {q:"Tinder-worthy?",             left:"Hard links 👈", right:"Super-like ⭐"},
-  {q:"Geschikt voor een kater?",   left:"Verkeerde keuze 💀", right:"Levensreddend 🏥"},
-  {q:"Delen met de groep?",        left:"Voor mezelf 🤫", right:"Voor iedereen 🎉"},
-  {q:"Midden in de nacht voor wakker worden?", left:"Nooit 😴", right:"Al onderweg 🚗"},
-  {q:"Verdedigen als iemand dit aanvalt?", left:"Laat maar 🤷", right:"Ga ik voor 🥊"},
-  {q:"Cadeau-waardig?",            left:"Nooit 🗑️",    right:"Onder de boom 🎁"},
-];
+// ══════════════════════════════════════════════════════════════════════════════
+// Paprikachips Proeverij — game core (all server-side logic)
+// Used by server.js (real Socket.io) and by the in-browser preview mock, so both
+// behave identically. `io` only needs: io.on('connection'), io.emit() and
+// io.sockets.sockets (Map of sockets with .data, .on(), .emit()).
+// ══════════════════════════════════════════════════════════════════════════════
+function attachGame(io) {
+  // Minigames between the tasting rounds (every player plays on their own device
+  // with the same seed; highest score wins 3/2/1 points).
+  const MINIGAME_EVERY = 4;          // a minigame after every 4th product
+  const MINIGAME_SEQUENCE = ['chip_eating', 'chipocalypse', 'bike_race'];
+  const ARCADE_MAX = { chip_eating: 600, chipocalypse: 20000, bike_race: 200000 };
+  const TASTE_KEYS = ['geur', 'stevigheid', 'smaak', 'textuur', 'uiterlijk', 'nasmaak'];
+  const MAX_PRODUCTS = 20;
 
-// ── Quiz questions ────────────────────────────────────────────────────────────
-const QUIZ_QUESTIONS = [
-  { q: "Uit welk land komt de Bratwurst origineel?", options: ["Nederland", "Oostenrijk", "Duitsland", "Zwitserland"], correct: 2 },
-  { q: "Wat is de ideale kerntemperatuur voor een gaar gegrilde worst?", options: ["55°C", "63°C", "72°C", "90°C"], correct: 2 },
-  { q: "Welke stad is wereldberoemd om zijn Currywurst?", options: ["München", "Hamburg", "Berlijn", "Keulen"], correct: 2 },
-  { q: "Hoe noem je het bruiningsproces van vlees op de grill?", options: ["Karamelisatie", "Maillard reactie", "Oxidatie", "Fermentatie"], correct: 1 },
-  { q: "Hoeveel worstvarianten telt Duitsland officieel?", options: ["Meer dan 200", "Meer dan 500", "Meer dan 1000", "Meer dan 1500"], correct: 3 },
-  { q: "Welk kruid is het meest kenmerkend in een Thüringer Rostbratwurst?", options: ["Tijm", "Majoraan", "Rozemarijn", "Salie"], correct: 1 },
-  { q: "Van welk dier is de meeste Nederlandse rookworst gemaakt?", options: ["Koe", "Kip", "Schaap", "Varken"], correct: 3 },
-  { q: "Wat maakt een grilworst 'knakken' als je erin bijt?", options: ["De darm", "Het vet", "Het zout", "De rook"], correct: 0 },
-];
-
-// ── Minigame sequence ─────────────────────────────────────────────────────────
-const MINIGAME_SEQUENCE = ['bitterbal_catch', 'bitterbal_stack', 'bitterbal_slice', 'bitterbal_basket', 'saus_memory', 'bitterbal_bounce', 'mosterd_mikken'];
-// Arcade games: every player plays on their own device with the same seed; highest score wins.
-const ARCADE_TYPES = ['bitterbal_catch', 'bitterbal_basket', 'bitterbal_stack', 'mosterd_mikken', 'bitterbal_slice', 'saus_memory', 'bitterbal_bounce'];
-const ARCADE_MAX = { bitterbal_catch: 20000, bitterbal_basket: 8000, bitterbal_stack: 4000, mosterd_mikken: 2000, bitterbal_slice: 3000, saus_memory: 13000, bitterbal_bounce: 6000 };
-
-// ── State ─────────────────────────────────────────────────────────────────────
-let state = {
-  phase: 'setup',
-  players: {},
-  fuets: [],
-  shuffledOrder: [],
-  currentFuetIdx: 0,
-  ratedPlayers: {},
-  scores: {},
-  quiz: null,
-  quizIdx: 0,  // kept for compat, unused
-  minigame: null,
-  minigameScores: {},
-  minigameIdx: 0,
-};
-
-let _quizTimer = null;
-let _mgTimer = null;
-
-function broadcast() { io.emit('stateUpdate', state); }
-
-function shuffleArray(arr) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-function startQuiz() {
-  const q = QUIZ_QUESTIONS[state.quizIdx % QUIZ_QUESTIONS.length];
-  state.quizIdx++;
-  state.quiz = { ...q, answers: {}, revealed: false, startedAt: Date.now(), duration: 20000 };
-  state.phase = 'quiz';
-  broadcast();
-  _quizTimer = setTimeout(() => { _quizTimer = null; revealQuiz(); }, 20000);
-}
-
-function checkAllAnswered() {
-  const connected = Object.entries(state.players).filter(([,p])=>p.connected).map(([n])=>n);
-  if (!connected.length || !state.quiz) return;
-  if (connected.every(n => state.quiz.answers[n] !== undefined)) {
-    if (_quizTimer) { clearTimeout(_quizTimer); _quizTimer = null; }
-    setTimeout(revealQuiz, 1500);
-  }
-}
-
-function revealQuiz() {
-  if (!state.quiz) return;
-  state.quiz.revealed = true;
-  broadcast();
-}
-
-function advanceFuet() {
-  state.quiz = null;
-  state.minigame = null;
-  if (state.currentFuetIdx < state.shuffledOrder.length - 1) {
-    state.currentFuetIdx++;
-    state.phase = 'tasting';
-  } else {
-    state.phase = 'results';
-  }
-  broadcast();
-}
-
-function checkAdvance(fuetId) {
-  const connected = Object.entries(state.players).filter(([,p])=>p.connected).map(([n])=>n);
-  if (!connected.length) return;
-  const rated = state.ratedPlayers[fuetId] || [];
-  if (!connected.every(n => rated.includes(n))) return;
-  broadcast();
-}
-
-// ── Minigame helpers ──────────────────────────────────────────────────────────
-function startMinigame(type) {
-  if (_mgTimer) { clearTimeout(_mgTimer); _mgTimer = null; }
-  state.minigame = {
-    type,
-    status: 'intro',
-    startedAt: null,
-    duration: null,
-    submissions: {},
-    stats: {},
-    seed: Math.floor(Math.random() * 2147483647),
-    curlingShots: {},
-    results: null,
-    pointsAwarded: {},
+  const state = {
+    phase: 'setup',            // setup → tasting → scoreboard → (minigame) → … → results
+    host: null,
+    players: {},
+    fuets: [],                 // products entered by the host: { id, name, price }
+    shuffledOrder: [],         // rounds: { id: 'r0', fuetId, name, price }  (name/price hidden until revealed)
+    currentFuetIdx: 0,
+    ratedPlayers: {},          // roundId → [names who submitted rating + guess]
+    scores: {},                // roundId → { name: { geur…, prijs } }
+    guesses: {},               // roundId → { name: fuetId | null }   (hidden until revealed)
+    comments: {},              // roundId → [{ name, text, t }]
+    blindScores: {},           // name → number of correct blind guesses
+    blindResults: {},          // roundId → { correct: [names] }
+    minigame: null,
+    minigameScores: {},
+    minigameIdx: 0,
   };
-  state.phase = 'minigame';
-  broadcast();
-}
+  let _mgTimer = null;
 
-function advanceMinigameStatus() {
-  const mg = state.minigame;
-  if (!mg) return;
-  switch (mg.type) {
-    case 'count_slices':
-    case 'count_urker_jan':
-    case 'perfect_slice':
-    case 'bitterbal_catch':
-    case 'bitterbal_basket':
-    case 'bitterbal_stack':
-    case 'mosterd_mikken':
-    case 'bitterbal_slice':
-    case 'saus_memory':
-    case 'bitterbal_bounce':
-      if (mg.status === 'intro') { mg.status = 'submit'; broadcast(); }
-      break;
-    case 'curling':
-      if (mg.status === 'intro') { mg.status = 'playing'; broadcast(); }
-      break;
+  // ── Visibility: which rounds are revealed to the players ───────────────────
+  function revealedUpTo() {
+    if (state.phase === 'results') return Infinity;
+    if (state.phase === 'scoreboard' || state.phase === 'minigame') return state.currentFuetIdx;
+    if (state.phase === 'tasting') return state.currentFuetIdx - 1;
+    return -1;
   }
-}
-
-function _awardMinigamePoints(ranked) {
-  const mg = state.minigame;
-  const pts = [3, 2, 1];
-  mg.results = ranked;
-  mg.pointsAwarded = {};
-  ranked.forEach((name, i) => {
-    const p = pts[i] || 0;
-    mg.pointsAwarded[name] = p;
-    if (p > 0) state.minigameScores[name] = (state.minigameScores[name] || 0) + p;
-  });
-  mg.status = 'reveal';
-}
-
-function revealMinigame() {
-  const mg = state.minigame;
-  if (!mg || mg.status === 'reveal') return;
-  const subs = mg.submissions;
-  const connected = Object.entries(state.players).filter(([,p])=>p.connected).map(([n])=>n);
-  const players = connected.filter(n => subs[n] !== undefined);
-  let ranked;
-  if (mg.type === 'perfect_slice') {
-    mg.target = 2.0;
-    ranked = [...players].sort((a, b) => Math.abs(subs[a] - 2.0) - Math.abs(subs[b] - 2.0));
-  } else if (mg.type === 'count_urker_jan') {
-    mg.target = 621;
-    ranked = [...players].sort((a, b) => Math.abs(subs[a] - 621) - Math.abs(subs[b] - 621));
-  } else if (mg.type === 'count_slices') {
-    mg.target = 173;
-    ranked = [...players].sort((a, b) => Math.abs(subs[a] - 173) - Math.abs(subs[b] - 173));
-  } else if (ARCADE_TYPES.includes(mg.type)) {
-    ranked = [...players].sort((a, b) => subs[b] - subs[a]);   // highest score wins
-  } else {
-    ranked = players;
+  function publicState(forName) {
+    const upTo = revealedUpTo();
+    const revealed = (i) => i <= upTo;
+    const rest = {};
+    Object.keys(state).forEach(k => { if (!['fuets', 'shuffledOrder', 'guesses', 'comments', 'blindResults'].includes(k)) rest[k] = state[k]; });
+    const pub = Object.assign(rest, {
+      fuets: state.fuets.map(f => ({ id: f.id, name: f.name })),                      // names only: these are the answer options
+      shuffledOrder: state.shuffledOrder.map((r, i) => revealed(i) ? { id: r.id, fuetId: r.fuetId, name: r.name, price: r.price } : { id: r.id }),
+      guesses: {}, comments: {}, blindResults: {},
+    });
+    const cur = state.shuffledOrder[state.currentFuetIdx];
+    if (state.phase === 'tasting' && cur && forName && (state.ratedPlayers[cur.id] || []).includes(forName)) pub.comments[cur.id] = state.comments[cur.id] || [];   // you may chat about the current chips once you've rated it
+    state.shuffledOrder.forEach((r, i) => {
+      if (!revealed(i)) return;
+      pub.guesses[r.id] = state.guesses[r.id] || {};
+      pub.comments[r.id] = state.comments[r.id] || [];
+      if (state.blindResults[r.id]) pub.blindResults[r.id] = state.blindResults[r.id];
+    });
+    if (forName && forName === state.host) pub.hostFuets = state.fuets;               // only the host sees the prices up front
+    return pub;
   }
-  _awardMinigamePoints(ranked);
-  broadcast();
-}
+  function broadcast() {
+    const map = io.sockets && io.sockets.sockets;
+    if (map && typeof map.forEach === 'function') map.forEach(s => s.emit('stateUpdate', publicState(s.data && s.data.name)));
+  }
 
-function revealCurling() {
-  const mg = state.minigame;
-  if (!mg || mg.type !== 'curling' || mg.status === 'reveal') return;
-  const shots = mg.curlingShots;
-  const connected = Object.entries(state.players).filter(([,p])=>p.connected).map(([n])=>n);
-  const bestDist = {};
-  connected.forEach(name => {
-    const ps = shots[name] || [];
-    bestDist[name] = ps.length > 0 ? Math.min(...ps.map(s => s.dist)) : 999;
-  });
-  mg.bestDistances = bestDist;
-  const ranked = [...connected].sort((a, b) => (bestDist[a] || 999) - (bestDist[b] || 999));
-  _awardMinigamePoints(ranked);
-  broadcast();
-}
+  function connectedNames() { return Object.entries(state.players).filter(([, p]) => p.connected).map(([n]) => n); }
+  function curRound() { return state.shuffledOrder[state.currentFuetIdx]; }
+  function shuffleArray(arr) {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+    return a;
+  }
+  function parsePrice(v) {
+    if (v === undefined || v === null || String(v).trim() === '') return null;
+    const n = parseFloat(String(v).replace(',', '.'));
+    if (!isFinite(n) || n < 0) return null;
+    return Math.min(99.99, Math.round(n * 100) / 100);
+  }
 
-// ── Socket events ─────────────────────────────────────────────────────────────
-io.on('connection', (socket) => {
-  socket.on('join', ({ name, photoIdx, avatarUrl }) => {
-    socket.data.name = name;
-    if (!state.players[name]) {
-      state.players[name] = { photoIdx, connected: true, avatarUrl: avatarUrl || null };
-    } else {
-      state.players[name].connected = true;
-      state.players[name].photoIdx = photoIdx;
-      if (avatarUrl) state.players[name].avatarUrl = avatarUrl;
-    }
+  // ── Round flow ─────────────────────────────────────────────────────────────
+  function advanceFuet() {
+    state.minigame = null;
+    if (state.currentFuetIdx < state.shuffledOrder.length - 1) { state.currentFuetIdx++; state.phase = 'tasting'; }
+    else state.phase = 'results';
     broadcast();
-  });
-
-  socket.on('disconnect', () => {
-    const name = socket.data.name;
-    if (name && state.players[name]) { state.players[name].connected = false; broadcast(); }
-  });
-
-  socket.on('addFuet', ({ name }) => {
-    if (state.phase !== 'setup') return;
-    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    state.fuets.push({ id, name });
-    broadcast();
-  });
-
-  socket.on('removeFuet', ({ id }) => {
-    if (state.phase !== 'setup') return;
-    state.fuets = state.fuets.filter(f => f.id !== id);
-    broadcast();
-  });
-
-  socket.on('startTasting', () => {
-    if (state.phase !== 'setup' || !state.fuets.length) return;
-    const shuffled = shuffleArray(state.fuets);
-    state.shuffledOrder = shuffled.map(f => ({ ...f }));
-    state.currentFuetIdx = 0;
-    state.ratedPlayers = {};
-    state.scores = {};
-    state.quizIdx = 0;
-    state.phase = 'tasting';
-    broadcast();
-  });
-
-  socket.on('submitScore', ({ fuetId, scores }) => {
+  }
+  function enterScoreboard() {
     if (state.phase !== 'tasting') return;
-    const name = socket.data.name;
-    if (!name) return;
-    if (!state.scores[fuetId]) state.scores[fuetId] = {};
-    state.scores[fuetId][name] = scores;
-    if (!state.ratedPlayers[fuetId]) state.ratedPlayers[fuetId] = [];
-    if (!state.ratedPlayers[fuetId].includes(name)) state.ratedPlayers[fuetId].push(name);
+    const round = curRound();
+    if (round && !state.blindResults[round.id]) {
+      const g = state.guesses[round.id] || {};
+      const correct = Object.keys(g).filter(n => g[n] === round.fuetId);
+      state.blindResults[round.id] = { correct };
+      correct.forEach(n => { state.blindScores[n] = (state.blindScores[n] || 0) + 1; });
+    }
+    state.phase = 'scoreboard';
     broadcast();
-    checkAdvance(fuetId);
-  });
-
-  socket.on('answerQuiz', ({ answerIdx }) => {
-    if (state.phase !== 'quiz' || !state.quiz) return;
-    const name = socket.data.name;
-    if (!name || state.quiz.answers[name] !== undefined) return;
-    state.quiz.answers[name] = answerIdx;
+  }
+  function usedFuetIds() {                     // products already revealed in earlier rounds
+    const upTo = revealedUpTo();
+    return state.shuffledOrder.filter((r, i) => i <= upTo).map(r => r.fuetId);
+  }
+  function submitScoreFor(name, payload) {
+    if (state.phase !== 'tasting' || !name || !state.players[name]) return false;
+    const round = curRound();
+    const { fuetId, scores, guess } = payload || {};
+    if (!round || fuetId !== round.id) return false;                     // only the current round, never stale
+    const clean = {};
+    TASTE_KEYS.forEach(k => { const v = Number(scores && scores[k]); clean[k] = isFinite(v) ? Math.max(0, Math.min(10, Math.round(v))) : 5; });
+    const pv = Number(scores && scores.prijs);
+    clean.prijs = isFinite(pv) ? Math.max(0, Math.min(5, Math.round(pv * 10) / 10)) : 2.5;
+    if (!state.scores[round.id]) state.scores[round.id] = {};
+    state.scores[round.id][name] = clean;
+    if (!state.guesses[round.id]) state.guesses[round.id] = {};
+    const valid = guess && state.fuets.some(f => f.id === guess) && !usedFuetIds().includes(guess);
+    state.guesses[round.id][name] = valid ? guess : null;
+    if (!state.ratedPlayers[round.id]) state.ratedPlayers[round.id] = [];
+    if (!state.ratedPlayers[round.id].includes(name)) state.ratedPlayers[round.id].push(name);
     broadcast();
-    checkAllAnswered();
-  });
+    return true;
+  }
 
-  socket.on('sendReaction', ({ emoji }) => {
-    const name = socket.data.name;
-    if (!name) return;
-    io.emit('reaction', { name, emoji, id: Date.now().toString(36) + Math.random().toString(36).slice(2) });
-  });
+  // ── Minigame helpers ───────────────────────────────────────────────────────
+  function startMinigame(type) {
+    if (_mgTimer) { clearTimeout(_mgTimer); _mgTimer = null; }
+    state.minigame = {
+      type, status: 'intro', submissions: {}, stats: {},
+      seed: Math.floor(Math.random() * 2147483647),
+      results: null, pointsAwarded: {},
+    };
+    state.phase = 'minigame';
+    broadcast();
+  }
+  function awardMinigamePoints(ranked) {
+    const mg = state.minigame, pts = [3, 2, 1];
+    mg.results = ranked; mg.pointsAwarded = {};
+    ranked.forEach((name, i) => {
+      const p = pts[i] || 0;
+      mg.pointsAwarded[name] = p;
+      if (p > 0) state.minigameScores[name] = (state.minigameScores[name] || 0) + p;
+    });
+    mg.status = 'reveal';
+  }
+  function revealMinigame() {
+    const mg = state.minigame;
+    if (!mg || mg.status === 'reveal') return;
+    const subs = mg.submissions;
+    const players = connectedNames().filter(n => subs[n] !== undefined);
+    awardMinigamePoints([...players].sort((a, b) => subs[b] - subs[a]));      // highest score wins
+    broadcast();
+  }
+  function submitMinigameFor(name, value, stats) {
+    const mg = state.minigame;
+    if (!name || !mg || !(mg.type in ARCADE_MAX) || mg.submissions[name] !== undefined) return;
+    let v = parseFloat(value);
+    if (isNaN(v)) return;
+    v = Math.max(0, Math.min(ARCADE_MAX[mg.type], Math.round(v)));
+    const clean = {};
+    if (stats && typeof stats === 'object') {
+      Object.keys(stats).slice(0, 12).forEach(k => {
+        const x = Number(stats[k]);
+        if (/^[a-zA-Z]{1,16}$/.test(k) && isFinite(x)) clean[k] = Math.max(0, Math.min(100000, Math.round(x)));
+      });
+    }
+    mg.stats[name] = clean;
+    mg.submissions[name] = v;
+    broadcast();
+    if (connectedNames().every(n => mg.submissions[n] !== undefined)) setTimeout(() => revealMinigame(), 1200);
+  }
 
-  socket.on('chatMessage', ({ text }) => {
-    const name = socket.data.name;
-    if (!name || !text) return;
-    io.emit('chatMessage', { name, text: String(text).slice(0, 300) });
-  });
+  // ── Socket events ──────────────────────────────────────────────────────────
+  io.on('connection', (socket) => {
+    const me = () => socket.data.name;
+    const isHost = () => !!me() && me() === state.host;
 
-  socket.on('kickPlayer', ({ name }) => {
-    if (state.players[name]) { delete state.players[name]; broadcast(); }
-  });
+    socket.on('join', ({ name, photoIdx, avatarUrl }) => {
+      name = String(name || '').trim().slice(0, 30);
+      if (!name) return;
+      socket.data.name = name;
+      if (!state.players[name]) state.players[name] = { photoIdx, connected: true, avatarUrl: avatarUrl || null };
+      else {
+        state.players[name].connected = true;
+        state.players[name].photoIdx = photoIdx;
+        if (avatarUrl) state.players[name].avatarUrl = avatarUrl;
+      }
+      if (!state.host || !state.players[state.host]) state.host = name;        // first player becomes host
+      broadcast();
+    });
 
-  socket.on('advancePhase', () => {
-    switch (state.phase) {
-      case 'tasting': {
-        const fuet = state.shuffledOrder[state.currentFuetIdx];
-        const connected = Object.entries(state.players).filter(([,p])=>p.connected).map(([n])=>n);
-        const rated = state.ratedPlayers[fuet?.id] || [];
-        if (connected.length && connected.every(n => rated.includes(n))) {
-          state.phase = 'scoreboard';
-          broadcast();
+    socket.on('renameMe', ({ name }) => {
+      const old = me();
+      name = String(name || '').trim().slice(0, 30);
+      if (!old || !state.players[old]) return;
+      if (!name || name === old) { socket.emit('renamed', { name: old }); return; }
+      if (state.players[name]) { socket.emit('renameError', { message: 'Die naam is al in gebruik' }); return; }
+      const mv = (o) => { if (o && Object.prototype.hasOwnProperty.call(o, old)) { o[name] = o[old]; delete o[old]; } };
+      const arr = (a) => { const i = a.indexOf(old); if (i >= 0) a[i] = name; };
+      mv(state.players); if (state.host === old) state.host = name;
+      Object.values(state.ratedPlayers).forEach(arr);
+      Object.values(state.scores).forEach(mv); Object.values(state.guesses).forEach(mv);
+      Object.values(state.comments).forEach(list => list.forEach(c => { if (c.name === old) c.name = name; }));
+      mv(state.blindScores); Object.values(state.blindResults).forEach(r => arr(r.correct || []));
+      mv(state.minigameScores);
+      const mg = state.minigame;
+      if (mg) { mv(mg.submissions); mv(mg.stats); mv(mg.pointsAwarded); if (Array.isArray(mg.results)) arr(mg.results); }
+      socket.data.name = name;
+      socket.emit('renamed', { name });
+      broadcast();
+    });
+
+    socket.on('leaveGame', () => {
+      const n = me();
+      if (!n || !state.players[n]) return;
+      if (state.phase === 'setup') {
+        delete state.players[n];
+        if (state.host === n) state.host = Object.keys(state.players).find(k => state.players[k].connected) || Object.keys(state.players)[0] || null;
+      } else state.players[n].connected = false;
+      socket.data.name = null;
+      broadcast();
+    });
+
+    socket.on('disconnect', () => {
+      const n = me();
+      if (n && state.players[n]) { state.players[n].connected = false; broadcast(); }
+    });
+
+    // ── Host-only: products, start, kick, reset, skip ──
+    socket.on('addFuet', ({ name, price }) => {
+      if (!isHost() || state.phase !== 'setup') return;
+      name = String(name || '').trim().slice(0, 40);
+      if (!name || state.fuets.length >= MAX_PRODUCTS) return;
+      const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      state.fuets.push({ id, name, price: parsePrice(price) });
+      broadcast();
+    });
+    socket.on('removeFuet', ({ id }) => {
+      if (!isHost() || state.phase !== 'setup') return;
+      state.fuets = state.fuets.filter(f => f.id !== id);
+      broadcast();
+    });
+    socket.on('startTasting', () => {
+      if (!isHost() || state.phase !== 'setup' || !state.fuets.length) return;
+      const shuffled = shuffleArray(state.fuets);
+      state.shuffledOrder = shuffled.map((f, i) => ({ id: 'r' + i, fuetId: f.id, name: f.name, price: f.price }));
+      Object.assign(state, { currentFuetIdx: 0, ratedPlayers: {}, scores: {}, guesses: {}, comments: {}, blindScores: {}, blindResults: {}, minigame: null, minigameScores: {}, minigameIdx: 0 });
+      state.phase = 'tasting';
+      broadcast();
+    });
+    socket.on('kickPlayer', ({ name }) => {
+      if (!isHost() || name === state.host) return;
+      if (state.players[name]) { delete state.players[name]; broadcast(); }
+    });
+    socket.on('setHost', ({ name }) => {
+      if (!isHost() || !state.players[name]) return;
+      state.host = name; broadcast();
+    });
+    socket.on('claimHost', () => {                       // fallback when the host's phone went offline
+      const n = me();
+      if (!n || !state.players[n]) return;
+      const h = state.players[state.host];
+      if (!h || !h.connected) { state.host = n; broadcast(); }
+    });
+    socket.on('nextFuet', () => { if (isHost()) advanceFuet(); });
+    socket.on('resetGame', () => {
+      if (!isHost()) return;
+      if (_mgTimer) { clearTimeout(_mgTimer); _mgTimer = null; }
+      Object.assign(state, {
+        phase: 'setup', fuets: [], shuffledOrder: [], currentFuetIdx: 0, ratedPlayers: {}, scores: {},
+        guesses: {}, comments: {}, blindScores: {}, blindResults: {}, minigame: null, minigameScores: {}, minigameIdx: 0,
+      });
+      broadcast();
+    });
+
+    // ── Everyone ──
+    socket.on('submitScore', (payload) => { submitScoreFor(me(), payload); });
+
+    socket.on('addComment', ({ rid, text }) => {
+      const n = me();
+      if (!n || !state.players[n]) return;
+      const idx = state.shuffledOrder.findIndex(r => r.id === rid);
+      const mayCurrent = state.phase === 'tasting' && idx === state.currentFuetIdx && (state.ratedPlayers[rid] || []).includes(n);
+      if (idx < 0 || (idx > revealedUpTo() && !mayCurrent)) return;      // revealed products, or the current one after you've rated it
+      text = String(text || '').trim().slice(0, 200);
+      if (!text) return;
+      if (!state.comments[rid]) state.comments[rid] = [];
+      if (state.comments[rid].length >= 80) return;
+      state.comments[rid].push({ name: n, text, t: Date.now() });
+      broadcast();
+    });
+
+    socket.on('sendReaction', ({ emoji }) => {
+      const n = me();
+      if (!n) return;
+      io.emit('reaction', { name: n, emoji: String(emoji || '').slice(0, 12), id: Date.now().toString(36) + Math.random().toString(36).slice(2) });
+    });
+
+    socket.on('advancePhase', () => {
+      switch (state.phase) {
+        case 'tasting': {
+          const round = curRound();
+          const rated = (round && state.ratedPlayers[round.id]) || [];
+          const conn = connectedNames();
+          if (conn.length && conn.every(n => rated.includes(n))) enterScoreboard();
+          break;
         }
-        break;
-      }
-      // quiz phase removed
-      case 'scoreboard': {
-        const shouldMinigame =
-          state.currentFuetIdx < state.shuffledOrder.length - 1 &&
-          state.minigameIdx < MINIGAME_SEQUENCE.length;
-        if (shouldMinigame) {
-          startMinigame(MINIGAME_SEQUENCE[state.minigameIdx++]);
-        } else {
-          advanceFuet();
+        case 'scoreboard': {
+          const should = state.currentFuetIdx < state.shuffledOrder.length - 1 && (state.currentFuetIdx + 1) % MINIGAME_EVERY === 0;
+          if (should) startMinigame(MINIGAME_SEQUENCE[state.minigameIdx++ % MINIGAME_SEQUENCE.length]);
+          else advanceFuet();
+          break;
         }
-        break;
+        case 'minigame':
+          if (state.minigame && state.minigame.status === 'reveal') advanceFuet();
+          break;
       }
-      case 'minigame':
-        if (state.minigame?.status === 'reveal') advanceFuet();
-        break;
-    }
+    });
+
+    socket.on('advanceMinigame', () => {
+      if (state.phase !== 'minigame' || !state.minigame) return;
+      if (state.minigame.status === 'intro') { state.minigame.status = 'submit'; broadcast(); }
+    });
+    socket.on('submitMinigameResult', ({ value, stats }) => { submitMinigameFor(me(), value, stats); });
+    socket.on('revealMinigame', () => { if (state.phase === 'minigame') revealMinigame(); });
   });
 
-  socket.on('advanceMinigame', () => {
-    if (state.phase !== 'minigame') return;
-    advanceMinigameStatus();
-  });
-
-  socket.on('submitMinigameResult', ({ value, stats }) => {
-    const name = socket.data.name;
-    if (!name || !state.minigame) return;
-    if (state.minigame.submissions[name] !== undefined) return;
-    let numVal = parseFloat(value);
-    if (isNaN(numVal)) return;
-    if (ARCADE_TYPES.includes(state.minigame.type)) {
-      numVal = Math.max(0, Math.min(ARCADE_MAX[state.minigame.type], Math.round(numVal)));
-      const clean = {};
-      if (stats && typeof stats === 'object') {
-        Object.keys(stats).slice(0, 12).forEach(k => {
-          const v = Number(stats[k]);
-          if (/^[a-zA-Z]{1,16}$/.test(k) && isFinite(v)) clean[k] = Math.max(0, Math.min(100000, Math.round(v)));
-        });
-      }
-      state.minigame.stats[name] = clean;
+  // ── Dev helper (preview + tests only): simulate other players ──────────────
+  function simulateOthers(names) {
+    names = names || ['Rik', 'Bram', 'Gert Jan', 'Marten'];
+    names.forEach(n => { if (!state.players[n]) state.players[n] = { photoIdx: 0, connected: true, avatarUrl: null }; else state.players[n].connected = true; });
+    if (state.phase === 'tasting') {
+      const round = curRound();
+      const open = state.fuets.map(f => f.id).filter(id => !usedFuetIds().includes(id));
+      names.forEach(n => {
+        const s = {}; TASTE_KEYS.forEach(k => { s[k] = Math.round(Math.random() * 10); }); s.prijs = Math.round(Math.random() * 50) / 10;
+        submitScoreFor(n, { fuetId: round.id, scores: s, guess: Math.random() < .35 ? round.fuetId : open[Math.floor(Math.random() * open.length)] });
+      });
+    } else if (state.phase === 'minigame' && state.minigame && state.minigame.status === 'submit') {
+      names.forEach(n => submitMinigameFor(n, Math.round(Math.random() * 300), {}));
     }
-    state.minigame.submissions[name] = numVal;
     broadcast();
-    const connected = Object.entries(state.players).filter(([,p])=>p.connected).map(([n])=>n);
-    if (connected.every(n => state.minigame.submissions[n] !== undefined)) {
-      setTimeout(() => revealMinigame(), 1200);
-    }
-  });
+  }
 
-  socket.on('curlingShot', ({ x, y }) => {
-    const name = socket.data.name;
-    if (!name || !state.minigame || state.minigame.type !== 'curling') return;
-    if (state.minigame.status !== 'playing') return;
-    if (!state.minigame.curlingShots[name]) state.minigame.curlingShots[name] = [];
-    if (state.minigame.curlingShots[name].length >= 3) return;
-    const cx = Math.max(0, Math.min(1, parseFloat(x)));
-    const cy = Math.max(0, Math.min(1, parseFloat(y)));
-    const dist = Math.sqrt(Math.pow(cx - 0.5, 2) + Math.pow(cy - 0.5, 2));
-    state.minigame.curlingShots[name].push({ x: cx, y: cy, dist });
-    broadcast();
-    const connected = Object.entries(state.players).filter(([,p])=>p.connected).map(([n])=>n);
-    if (connected.every(n => (state.minigame.curlingShots[n] || []).length >= 3)) {
-      setTimeout(() => revealCurling(), 1200);
-    }
-  });
-
-  socket.on('revealMinigame', () => {
-    if (state.phase !== 'minigame') return;
-    if (state.minigame?.type === 'curling') revealCurling();
-    else revealMinigame();
-  });
-
-  socket.on('nextFuet', () => {
-    if (_quizTimer) { clearTimeout(_quizTimer); _quizTimer = null; }
-    advanceFuet();
-  });
-
-  socket.on('resetGame', () => {
-    if (_quizTimer) { clearTimeout(_quizTimer); _quizTimer = null; }
+  function resetAll() {                                  // preview/tests only: forget everybody
     if (_mgTimer) { clearTimeout(_mgTimer); _mgTimer = null; }
     Object.assign(state, {
-      phase: 'setup', fuets: [], shuffledOrder: [], currentFuetIdx: 0,
-      ratedPlayers: {}, scores: {}, quiz: null, quizIdx: 0,
-      minigame: null, minigameScores: {}, minigameIdx: 0,
+      phase: 'setup', host: null, players: {}, fuets: [], shuffledOrder: [], currentFuetIdx: 0, ratedPlayers: {}, scores: {},
+      guesses: {}, comments: {}, blindScores: {}, blindResults: {}, minigame: null, minigameScores: {}, minigameIdx: 0,
     });
     broadcast();
-  });
-});
+  }
+
+  return { state, publicState, broadcast, simulateOthers, submitScoreFor, resetAll };
+}
+if (typeof module !== 'undefined' && module.exports) module.exports = attachGame;
+
+
+attachGame(io);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Fuet server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Paprikachips server running on port ${PORT}`));

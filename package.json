@@ -1,7 +1,7 @@
 {
-  "name": "bitterbal-proeverij",
+  "name": "paprikachips-proeverij",
   "version": "1.0.0",
-  "description": "Bitterbal tasting app voor de vrienden",
+  "description": "Paprikachips tasting app voor de vrienden",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
